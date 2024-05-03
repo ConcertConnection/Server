@@ -38,5 +38,17 @@ database:
         - concert_date
         - venue_name
         - artist_name
-      primary_key: (concert_uuid, ticket_uuid
+      primary_key: (concert_uuid, ticket_uuid)
+    concert_table:
+      name: concert_table
+      columns:
+        - concert_uuid
+        - venue_uuid
+        - concert_date
+        - artist_name
+        - artist_bio
+        - artist_image
+        - artist_video
+      primary_key: concert_uuid
+
 
