@@ -50,5 +50,10 @@ database:
         - artist_image
         - artist_video
       primary_key: concert_uuid
+    venue_table:
+      name: venue_table
+      columns:
+        - venue_uuid
+        -
 
 

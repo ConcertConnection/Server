@@ -1,0 +1,11 @@
+[package]
+name = "concert_connect_server"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+datetime = "0.5.2"
+anyhow = {version = "1", features=["backtrace"]}
+scylla = "0.12.0"
+serde = "1.0"
+config = "0.14.0"
