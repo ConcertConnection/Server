@@ -6,7 +6,13 @@ use std::env;
 use std::fmt::format;
 use scylla::prepared_statement::PreparedStatement;
 use scylla::transport::errors::NewSessionError;
-use crate::config::Config;
+use crate::config::CommonConfig;
+
+mod user;
+mod claimed_pass;
+mod unclaimed_pass;
+mod concert;
+mod venue;
 
 pub struct DatabaseConnection {
     //* holds the db session and prepared statements
@@ -34,7 +40,7 @@ impl DatabaseConnection {
 }
 struct PreparedStatements {
     //* Contains the prepared statements used in our queries
-    pub users: PreparedStatement,
+    pub users_insert: PreparedStatement,
 
 }
 
@@ -49,7 +55,8 @@ impl PreparedStatements {
                     user_table, user_table_columns.join(", "), vec!["?"; user_table_columns.len()].join(", ")
                 )
             ).await?;
+        Ok(PreparedStatements { user_insert, })
     }
 
-    Ok(PreparedStatements { user_insert, })
+
 }

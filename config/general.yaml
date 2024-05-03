@@ -28,7 +28,7 @@ database:
         - concert_date
         - venue_name
         - artist_name
-      primary_key: (user_uuid, ticket_uuid)
+      primary_key: user_uuid, ticket_uuid
     unclaimed_pass_table:
       name: unclaimed_passes
       columns:
@@ -38,7 +38,7 @@ database:
         - concert_date
         - venue_name
         - artist_name
-      primary_key: (concert_uuid, ticket_uuid)
+      primary_key: concert_uuid, ticket_uuid
     concert_table:
       name: concert_table
       columns:
@@ -54,6 +54,9 @@ database:
       name: venue_table
       columns:
         - venue_uuid
-        -
+        - name
+        - address
+        - capacity
+      primary_key: venue_uuid
 
 
