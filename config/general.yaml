@@ -1,0 +1,42 @@
+server:
+  host: 0.0.0.0
+  port: 4000
+authenticator:
+  # Pass
+database:
+  db_addr: 127.0.0.1:9042
+  keyspace: concert_connect
+  tables:
+    user_table:
+      name: user_table
+      columns:
+        - user_uuid
+        - first_name
+        - last_name
+        - email
+        - active
+        - paused
+        - sign_up_date
+      primary_key: uuid
+    claimed_pass_table:
+      name: claimed_passes
+      columns:
+        - ticket_uuid
+        - concert_uuid
+        - user_uuid
+        - venue_uuid
+        - concert_date
+        - venue_name
+        - artist_name
+      primary_key: (user_uuid, ticket_uuid)
+    unclaimed_pass_table:
+      name: unclaimed_passes
+      columns:
+        - ticket_uuid
+        - concert_uuid
+        - venue_uuid
+        - concert_date
+        - venue_name
+        - artist_name
+      primary_key: (concert_uuid, ticket_uuid
+
