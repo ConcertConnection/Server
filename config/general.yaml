@@ -1,62 +1,102 @@
 server:
   host: 0.0.0.0
   port: 4000
+
 authenticator:
   # Pass
 database:
-  db_addr: 127.0.0.1:9042
+  database_addr: 127.0.0.1:9042
   keyspace: concert_connect
   tables:
     user_table:
       name: user_table
       columns:
-        - user_uuid
-        - first_name
-        - last_name
-        - email
-        - active
-        - paused
-        - sign_up_date
+        - name: user_uuid
+          dtype: uuid
+        - name: first_name
+          dtype: text
+        - name: last_name
+          dtype: text
+        - name: email
+          dtype: text
+        - name: active
+          dtype: boolean
+        - name: paused
+          dtype: boolean
+        - name: sign_up_date
+          dtype: timestamp
       primary_key: uuid
     claimed_pass_table:
       name: claimed_passes
       columns:
-        - ticket_uuid
-        - concert_uuid
-        - user_uuid
-        - venue_uuid
-        - concert_date
-        - venue_name
-        - artist_name
-      primary_key: user_uuid, ticket_uuid
+        - name: ticket_uuid
+          dtype: uuid
+        - name: concert_uuid
+          dtype: uuid
+        - name: user_uuid
+          dtype: uuid
+        - name: venue_uuid
+          dtype: uuid
+        - name: concert_date
+          dtype: timestamp
+        - name: venue_name
+          dtype: string
+        - name: artist_name
+          dtype: string
+        - name: standby
+          dtype: bool
+      primary_key: user_uuid, ticket_uuid, concert_uuid
     unclaimed_pass_table:
       name: unclaimed_passes
       columns:
-        - ticket_uuid
-        - concert_uuid
-        - venue_uuid
-        - concert_date
-        - venue_name
-        - artist_name
+        - name: ticket_uuid
+          dtype: uuid
+        - name: concert_uuid
+          dtype: uuid
+        - name: venue_uuid
+          dtype: uuid
+        - name: concert_date
+          dtype: timestamp
+        - name: venue_name
+          dtype: string
+        - name: artist_name
+          dtype: string
+        - name: standby
+          dtype: bool
       primary_key: concert_uuid, ticket_uuid
     concert_table:
       name: concert_table
       columns:
-        - concert_uuid
-        - venue_uuid
-        - concert_date
-        - artist_name
-        - artist_bio
-        - artist_image
-        - artist_video
+        - name: concert_uuid
+          dtype: uuid
+        - name: venue_uuid
+          dtype: uuid
+        - name: concert_date
+          dtype: timestamp
+        - name: artist_name
+          dtype: string
+        - name: artist_bio
+          dtype: string
+        - name: artist_image
+          dtype: string
+        - name: artist_video
+          dtype: string
+        - name: standby_tickets
+          dtype: int
+        - name: secured_tickets
+          dytpe: int
       primary_key: concert_uuid
     venue_table:
       name: venue_table
       columns:
-        - venue_uuid
-        - name
-        - address
-        - capacity
+        - name: venue_uuid
+          dtype: uuid
+        - name: name
+          dtype: string
+        - name: address
+          dtype: string
+        - name: capacity
+          dtype: int
       primary_key: venue_uuid
 
 
