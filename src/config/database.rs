@@ -1,14 +1,24 @@
-use std::fmt::format;
 use serde::Deserialize;
+use struct_iterable::Iterable;
 
 #[derive(Deserialize, Clone, Debug)]
 pub struct DatabaseConfig {
-    pub database_addr: String,
-    pub keyspace: String,
+    database_addr: String,
+    keyspace: String,
     pub tables: Tables
 }
 
-#[derive(Deserialize, Clone, Debug)]
+impl DatabaseConfig {
+    pub fn database_addr(&self) -> &str {
+        &self.database_addr
+    }
+    pub fn keyspace(&self) -> &str {
+        &self.keyspace
+    }
+}
+
+
+#[derive(Deserialize, Clone, Debug, Iterable)]
 pub struct Tables {
     pub user_table: TableConfig,
     pub claimed_pass_table: TableConfig,

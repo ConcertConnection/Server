@@ -1,4 +1,3 @@
-use std::fmt::format;
 pub use common::*;
 use environment::*;
 use config::{
@@ -39,10 +38,11 @@ mod test_config {
     fn test_local_configuration() {
         std::env::set_var("CC_ENV", "Dev");
         let config = load_configuration();
+        println!("{:?}", config);
         assert!(config.is_ok(), "{}", config.unwrap_err());
         let config = config.unwrap();
-        assert_eq!(config.database.database_addr, "127.0.0.1:9042".to_string());
-        assert_eq!(config.database.keyspace, "concert_connect".to_string());
+        assert_eq!(config.database.database_addr(), "127.0.0.1:9042".to_string());
+        assert_eq!(config.database.keyspace(), "concert_connect".to_string());
         assert_eq!(config.database.tables.user_table.name, "user_table");
         // assert_eq!(
         //     config.database.tables.user_table.columns,

@@ -1,6 +1,5 @@
 use datetime;
 use anyhow;
-use anyhow::Error;
 use crate::concert_pass::ConcertPass;
 struct Member<'a> {
     first_name: String,

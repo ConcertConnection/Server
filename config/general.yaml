@@ -25,7 +25,7 @@ database:
           dtype: boolean
         - name: sign_up_date
           dtype: timestamp
-      primary_key: uuid
+      primary_key: user_uuid
     claimed_pass_table:
       name: claimed_passes
       columns:
@@ -40,11 +40,11 @@ database:
         - name: concert_date
           dtype: timestamp
         - name: venue_name
-          dtype: string
+          dtype: text
         - name: artist_name
-          dtype: string
+          dtype: text
         - name: standby
-          dtype: bool
+          dtype: boolean
       primary_key: user_uuid, ticket_uuid, concert_uuid
     unclaimed_pass_table:
       name: unclaimed_passes
@@ -58,11 +58,11 @@ database:
         - name: concert_date
           dtype: timestamp
         - name: venue_name
-          dtype: string
+          dtype: text
         - name: artist_name
-          dtype: string
+          dtype: text
         - name: standby
-          dtype: bool
+          dtype: boolean
       primary_key: concert_uuid, ticket_uuid
     concert_table:
       name: concert_table
@@ -74,17 +74,17 @@ database:
         - name: concert_date
           dtype: timestamp
         - name: artist_name
-          dtype: string
+          dtype: text
         - name: artist_bio
-          dtype: string
+          dtype: text
         - name: artist_image
-          dtype: string
+          dtype: text
         - name: artist_video
-          dtype: string
+          dtype: text
         - name: standby_tickets
           dtype: int
         - name: secured_tickets
-          dytpe: int
+          dtype: int
       primary_key: concert_uuid
     venue_table:
       name: venue_table
@@ -92,9 +92,9 @@ database:
         - name: venue_uuid
           dtype: uuid
         - name: name
-          dtype: string
+          dtype: text
         - name: address
-          dtype: string
+          dtype: text
         - name: capacity
           dtype: int
       primary_key: venue_uuid
