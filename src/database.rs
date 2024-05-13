@@ -22,7 +22,7 @@ pub struct DatabaseConnection {
     //* other mods use this to access the database
     session: Session,
     keyspace: String,
-    statements: PreparedStatements
+    pub statements: PreparedStatements
 }
 impl DatabaseConnection {
     pub async fn build(config: &CommonConfig) -> Result<Self>{
@@ -174,11 +174,11 @@ impl TableQueries {
 
 #[cfg(test)]
 mod tests{
-    use chrono::Utc;
+    use chrono::{TimeZone, Utc};
     use struct_iterable::Iterable;
     use crate::config;
     use crate::database::DatabaseConnection;
-    use crate::database::row_structs::User;
+    use crate::database::row_structs::{User, ClaimedPass};
     use uuid::Uuid;
     use fake::faker::name::raw::{ FirstName, LastName };
     use fake::faker::boolean::en::Boolean;
@@ -186,6 +186,7 @@ mod tests{
     use fake::faker::internet::en::SafeEmail;
     use fake::locales::EN;
     use claims::{assert_err, assert_ok, assert_none, assert_some};
+    use crate::config::CommonConfig;
 
     fn first_name() -> String { FirstName(EN).fake() }
     fn last_name() -> String { LastName(EN).fake() }
@@ -194,14 +195,20 @@ mod tests{
 
     fn boolean() -> bool { Boolean(5).fake()}
 
+    async fn create_new_db_connection(config: &mut CommonConfig) -> DatabaseConnection {
+        config.database.keyspace = first_name();
+        DatabaseConnection::build(&config)
+            .await
+            .expect("Could not create database connection")
+    }
+
     #[tokio::test]
     async fn prepared_statements_has_all_of_the_tables() {
-        let config = config::load_configuration()
+        let mut config = config::load_configuration()
             .expect("Failed to read config");
 
-        let database_connection = DatabaseConnection::build(&config)
-            .await
-            .expect("Could not create database connection");
+        let database_connection = create_new_db_connection(&mut config)
+            .await;
 
 
         for (name, value) in config.database.tables.iter() {
@@ -211,11 +218,10 @@ mod tests{
 
     #[tokio::test]
     async fn insert_statement_works() {
-        let config = config::load_configuration()
+        let mut config = config::load_configuration()
             .expect("Failed to read config");
-        let database_connection = DatabaseConnection::build(&config)
-            .await
-            .expect("Could not create database connection");
+        let database_connection = create_new_db_connection(&mut config)
+            .await;
 
         let user_uuid = Uuid::new_v4();
 
@@ -227,6 +233,17 @@ mod tests{
             boolean(),
             boolean(),
             Some(Utc::now())
+        );
+
+        let claimed_pass = ClaimedPass::new(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            user_uuid,
+            Uuid::new_v4(),
+            Utc.with_ymd_and_hms(2024, 6, 10 , 20, 30, 0).unwrap(),
+            "RedRocks".into(),
+            "Sting".into(),
+            false
         );
 
         let query_result = database_connection.execute(
@@ -248,7 +265,56 @@ mod tests{
 
         assert_some!(&query_result.rows);
 
-        assert_eq!(user, query_result.rows_typed::<User>().unwrap().next().unwrap().unwrap())
+
+
+
+        assert_eq!(user, query_result.rows_typed::<User>().unwrap().next().unwrap().unwrap());
+        let query_result = database_connection.execute(
+            &String::from("user_table"),
+            &String::from("insert"),
+            Some(&user)
+        )
+            .await
+            .expect("Could not execute insert query");
+        assert_none!(&query_result.rows);
+
+        let query_result = database_connection.execute::<User>(
+            &String::from("user_table"),
+            &String::from("select"),
+            None
+        )
+            .await
+            .expect("Could not execute select query");
+
+        assert_some!(&query_result.rows);
+
+
+
+
+        assert_eq!(user, query_result.rows_typed::<User>().unwrap().next().unwrap().unwrap());
+
+        let table_query = &database_connection.statements.table_queries;
+
+        let query_result = database_connection.execute(
+            &String::from("claimed_passes"),
+            &String::from("insert"),
+            Some(&claimed_pass)
+        )
+            .await
+            .expect("Could not execute insert query");
+        println!("{:?}",database_connection.session.get_keyspace());
+
+        assert_none!(&query_result.rows);
+        let query_result = database_connection.execute::<ClaimedPass>(
+            &String::from("claimed_passes"),
+            &String::from("select"),
+            None
+        )
+            .await
+            .expect("Could not execute select query");
+        println!("{:?}", &query_result);
+        assert_some!(&query_result.rows);
+        assert_eq!(claimed_pass, query_result.rows_typed::<ClaimedPass>().unwrap().next().unwrap().unwrap())
 
     }
 }

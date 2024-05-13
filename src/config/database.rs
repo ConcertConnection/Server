@@ -4,7 +4,7 @@ use struct_iterable::Iterable;
 #[derive(Deserialize, Clone, Debug)]
 pub struct DatabaseConfig {
     database_addr: String,
-    keyspace: String,
+    pub(crate) keyspace: String,
     pub tables: Tables
 }
 
@@ -21,8 +21,8 @@ impl DatabaseConfig {
 #[derive(Deserialize, Clone, Debug, Iterable)]
 pub struct Tables {
     pub user_table: TableConfig,
-    pub claimed_pass_table: TableConfig,
-    pub unclaimed_pass_table: TableConfig,
+    pub claimed_passes: TableConfig,
+    pub unclaimed_passes: TableConfig,
     pub concert_table: TableConfig,
     pub venue_table: TableConfig,
 }

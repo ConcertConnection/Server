@@ -26,7 +26,7 @@ database:
         - name: sign_up_date
           dtype: timestamp
       primary_key: user_uuid
-    claimed_pass_table:
+    claimed_passes:
       name: claimed_passes
       columns:
         - name: ticket_uuid
@@ -46,7 +46,7 @@ database:
         - name: standby
           dtype: boolean
       primary_key: user_uuid, ticket_uuid, concert_uuid
-    unclaimed_pass_table:
+    unclaimed_passes:
       name: unclaimed_passes
       columns:
         - name: ticket_uuid

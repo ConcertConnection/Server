@@ -4,7 +4,7 @@ use super::Nameable;
 use chrono::{Utc, DateTime};
 use scylla::frame::value::CqlTimestamp;
 
-#[derive(FromRow, SerializeRow, Eq, ParitalEq, Debug)]
+#[derive(FromRow, SerializeRow, Eq, PartialEq, Debug)]
 pub struct ClaimedPass {
     ticket_uuid: Uuid,
     concert_uuid: Uuid,
@@ -23,10 +23,29 @@ impl Nameable for ClaimedPass {
     }
 }
 
+
 impl ClaimedPass {
     pub fn new(
         ticket_uuid: Uuid,
         concert_uuid: Uuid,
-        user_uuid
-    )
+        user_uuid: Uuid,
+        venue_uuid: Uuid,
+        concert_date: DateTime<Utc>,
+        venue_name: String,
+        artist_name: String,
+        standby: bool
+    ) -> Self {
+        let concert_date = CqlTimestamp(concert_date.timestamp_millis());
+
+        Self {
+            ticket_uuid,
+            concert_uuid,
+            user_uuid,
+            venue_uuid,
+            concert_date,
+            venue_name,
+            artist_name,
+            standby
+        }
+    }
 }
