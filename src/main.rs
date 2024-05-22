@@ -1,12 +1,14 @@
+use concert_connect_server::config::load_configuration;
+use concert_connect_server::telemetry::{get_subscriber, init_subscriber};
+use concert_connect_server::startup::Application;
+#[tokio::main]
+async fn main() -> Result<(), std::io::Error>{
+    let subscriber = get_subscriber("Server".into(), "info".into(), std::io::stdout);
+    init_subscriber(subscriber);
 
-mod member;
-mod server;
-mod auth;
-mod config;
-mod error;
-mod concert_pass;
-mod database;
+    let configuration = load_configuration().expect("Could not load configuration");
+    let application = Application::build(configuration).await?;
 
-fn main() {
-    println!("Hello, world!");
+    application.run_until_stopped().await?;
+    Ok(())
 }

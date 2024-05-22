@@ -11,11 +11,7 @@ use crate::config::database::Column;
 use struct_iterable::Iterable;
 
 mod row_structs;
-use row_structs::Nameable;
-
-pub trait ConvertToRowInsert {
-    fn convert_to_db_row(&self) -> String;
-}
+pub use row_structs::*;
 
 pub struct DatabaseConnection {
     //* holds the db session and prepared statements
@@ -42,11 +38,12 @@ impl DatabaseConnection {
             .await?;
         Ok(DatabaseConnection { session, keyspace, statements })
     }
-    pub async fn execute<T: SerializeRow + Nameable>(
+    pub async fn execute<T: SerializeRow + Nameable, C: SerializeRow>(
         &self,
         table_name: &String,
-        kind: &String,
-        row_values :Option<&T>
+        kind: &mut String,
+        row_values: Option<&T>,
+        conditions: Option<&C>
     ) -> Result<QueryResult, QueryError> {
         // This function executes any of the prepared statements.
         // If insert is the type a row value must be included, function panics if not.
@@ -56,6 +53,12 @@ impl DatabaseConnection {
             panic!("Row values required for insert")
         }
         let table = &self.statements.table_queries[table_name];
+        let kind = if conditions.is_some() && kind.to_lowercase() == "select" {
+            kind.push_str("_where");
+            kind
+        } else {
+            kind
+        };
         let prepared_statement = match table.get_query(kind) {
             Ok(statement) => statement,
             Err(e) => panic!("{e}")
@@ -69,6 +72,9 @@ impl DatabaseConnection {
                 panic!("The passed Serialize row struct does not match the table name passed")
             }
             self.session.execute(prepared_statement, row)
+                .await
+        } else if conditions.is_some(){
+            self.session.execute(prepared_statement, conditions.unwrap())
                 .await
         } else {
             self.session.execute(prepared_statement, &[])
@@ -112,6 +118,7 @@ impl PreparedStatements {
 pub struct TableQueries {
     insert: PreparedStatement,
     select: PreparedStatement,
+    select_where: PreparedStatement,
     create: PreparedStatement
 }
 
@@ -129,8 +136,10 @@ impl TableQueries {
         let select_statement = Self::make_select_query(table_config);
         let select = session.prepare(select_statement).await?;
 
+        let select_where_statement = Self::make_conditional_select_query(table_config);
+        let select_where = session.prepare(select_where_statement).await?;
 
-        Ok(TableQueries { insert, select, create })
+        Ok(TableQueries { insert, select, create, select_where })
     }
     pub fn get_column_names(columns: &Vec<Column>) -> String {
         let col_names: String = columns.iter()
@@ -138,6 +147,13 @@ impl TableQueries {
             .collect::<Vec<String>>()
             .join(", ");
         col_names
+    }
+
+    pub fn where_select_clause(primary_key: &String) -> String {
+        primary_key.split(", ")
+            .map(|s| format!("{s} = ?"))
+            .collect::<Vec<String>>()
+            .join("AND ")
     }
     fn make_insert_query(table_config: &TableConfig) -> String {
         let column_names: String = Self::get_column_names(&table_config.columns);
@@ -151,6 +167,12 @@ impl TableQueries {
         format!("SELECT {} FROM {}", column_names, &table_config.name)
     }
 
+    fn make_conditional_select_query(table_config: &TableConfig) -> String {
+        let column_names = Self::get_column_names(&table_config.columns);
+        let select = Self::where_select_clause(&table_config.primary_key);
+        format!("SELECT {} FROM {} WHERE {}", column_names, &table_config.name, select)
+    }
+
     fn make_create_query(table_config: &TableConfig) -> String {
         let column_name_type: String = table_config.columns.iter()
             .map(|col| format!("{} {}", col.name, col.dtype))
@@ -162,6 +184,7 @@ impl TableQueries {
     pub fn get_query(&self, query_name: &String) -> Result<&PreparedStatement, String> {
         let query = match query_name.to_lowercase().as_str() {
             "insert" => &self.insert,
+            "select_where" => &self.select_where,
             "select" => &self.select,
             "create" => &self.create,
             other => return Err(format!("{} is not a supported query", other))
@@ -177,8 +200,8 @@ mod tests{
     use chrono::{TimeZone, Utc};
     use struct_iterable::Iterable;
     use crate::config;
-    use crate::database::DatabaseConnection;
-    use crate::database::row_structs::{User, ClaimedPass};
+    use crate::database::{ClaimedPassConditions, DatabaseConnection, UserConditions};
+    use crate::database::{User, ClaimedPass};
     use uuid::Uuid;
     use fake::faker::name::raw::{ FirstName, LastName };
     use fake::faker::boolean::en::Boolean;
@@ -245,69 +268,71 @@ mod tests{
             "Sting".into(),
             false
         );
-
-        let query_result = database_connection.execute(
-            &String::from("user_table"),
-            &String::from("insert"),
-            Some(&user)
+        let user_table = String::from("user_table");
+        let mut insert = String::from("insert");
+        let query_result = database_connection.execute::<User, UserConditions>(
+            &user_table,
+            &mut insert,
+            Some(&user),
+            None
         )
             .await
             .expect("Could not execute insert query");
         assert_none!(&query_result.rows);
-
-        let query_result = database_connection.execute::<User>(
-            &String::from("user_table"),
-            &String::from("select"),
+        let mut select = String::from("select");
+        let query_result = database_connection.execute::<User, UserConditions>(
+            &user_table,
+            &mut select,
+            None,
             None
         )
             .await
             .expect("Could not execute select query");
 
         assert_some!(&query_result.rows);
-
-
-
 
         assert_eq!(user, query_result.rows_typed::<User>().unwrap().next().unwrap().unwrap());
-        let query_result = database_connection.execute(
-            &String::from("user_table"),
-            &String::from("insert"),
-            Some(&user)
+        let query_result = database_connection.execute::<User, UserConditions>(
+            &user_table,
+            &mut insert,
+            Some(&user),
+            None
         )
             .await
             .expect("Could not execute insert query");
         assert_none!(&query_result.rows);
 
-        let query_result = database_connection.execute::<User>(
-            &String::from("user_table"),
-            &String::from("select"),
+        let query_result = database_connection.execute::<User, UserConditions>(
+            &user_table,
+            &mut select,
+            None,
             None
         )
             .await
             .expect("Could not execute select query");
 
         assert_some!(&query_result.rows);
-
-
-
 
         assert_eq!(user, query_result.rows_typed::<User>().unwrap().next().unwrap().unwrap());
 
         let table_query = &database_connection.statements.table_queries;
-
-        let query_result = database_connection.execute(
-            &String::from("claimed_passes"),
-            &String::from("insert"),
-            Some(&claimed_pass)
+        let insert = &mut String::from("insert");
+        let claimed_passes_s = String::from("claimed_passes");
+        let query_result = database_connection.execute::<ClaimedPass, ClaimedPassConditions>(
+            &claimed_passes_s,
+            insert,
+            Some(&claimed_pass),
+            None
         )
             .await
             .expect("Could not execute insert query");
         println!("{:?}",database_connection.session.get_keyspace());
 
         assert_none!(&query_result.rows);
-        let query_result = database_connection.execute::<ClaimedPass>(
-            &String::from("claimed_passes"),
-            &String::from("select"),
+        let query_result = database_connection.execute::<ClaimedPass, ClaimedPassConditions>(
+            &claimed_passes_s,
+            &mut select,
+            None,
             None
         )
             .await
@@ -315,6 +340,73 @@ mod tests{
         println!("{:?}", &query_result);
         assert_some!(&query_result.rows);
         assert_eq!(claimed_pass, query_result.rows_typed::<ClaimedPass>().unwrap().next().unwrap().unwrap())
+
+    }
+
+    #[tokio::test]
+    async fn test_conditional_where() {
+        let mut config = config::load_configuration()
+            .expect("Failed to read config");
+        let database_connection = create_new_db_connection(&mut config)
+            .await;
+
+        let user_uuid1 = Uuid::new_v4();
+
+        let user1 = User::new(
+            user_uuid1,
+            first_name(),
+            last_name(),
+            email(),
+            boolean(),
+            boolean(),
+            Some(Utc::now())
+        );
+
+        let user_uuid2 = Uuid::new_v4();
+
+        let user2 = User::new(
+            user_uuid2,
+            first_name(),
+            last_name(),
+            email(),
+            boolean(),
+            boolean(),
+            Some(Utc::now())
+        );
+
+        let insert = &mut String::from("insert");
+        let user_table = String::from("user_table");
+        let query_result = database_connection.execute::<User, UserConditions>(
+            &user_table,
+            insert,
+            Some(&user1),
+            None
+        )
+            .await
+            .expect("Could not execute insert query");
+        assert_none!(&query_result.rows);
+        let query_result = database_connection.execute::<User, UserConditions>(
+            &user_table,
+            insert,
+            Some(&user2),
+            None
+        )
+            .await
+            .expect("Could not execute insert query");
+        assert_none!(&query_result.rows);
+
+        let conditions = UserConditions::new(user_uuid1);
+        let select_where = &mut String::from("select");
+        let query_result = database_connection.execute::<User, UserConditions>(
+            &user_table,
+            select_where,
+            None,
+            Some(&conditions)
+        )
+            .await
+            .expect("Could not run select query");
+        assert_eq!(query_result.rows.as_ref().unwrap().len(), 1);
+        assert_eq!(user1, query_result.rows_typed::<User>().unwrap().next().unwrap().unwrap())
 
     }
 }

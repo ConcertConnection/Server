@@ -4,6 +4,11 @@ server:
 
 authenticator:
   # Pass
+email_client:
+  base_url: "localhost"
+  sender_email: "tests@gmail.com"
+  authorization_token: "my-secret-token"
+  timeout_milliseconds: 100000
 database:
   database_addr: 127.0.0.1:9042
   keyspace: concert_connect
@@ -81,11 +86,11 @@ database:
           dtype: text
         - name: artist_video
           dtype: text
-        - name: standby_tickets
+        - name: standby_passes
           dtype: int
-        - name: secured_tickets
+        - name: secured_passes
           dtype: int
-      primary_key: concert_uuid
+      primary_key: concert_uuid, concert_date
     venue_table:
       name: venue_table
       columns:

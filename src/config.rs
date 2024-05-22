@@ -8,8 +8,9 @@ use config::{
 pub mod authenticator;
 pub mod common;
 mod server;
-pub(crate) mod database;
+pub mod database;
 mod environment;
+mod email_client;
 pub fn load_configuration() -> Result<CommonConfig, ConfigError> {
     let base_path = std::env::current_dir().expect("Failed to retrieve current directory");
     let config_dir = base_path.join("config");

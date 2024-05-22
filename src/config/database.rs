@@ -15,6 +15,9 @@ impl DatabaseConfig {
     pub fn keyspace(&self) -> &str {
         &self.keyspace
     }
+    pub fn set_keyspace(&mut self, new_keyspace: String) {
+        self.keyspace = new_keyspace
+    }
 }
 
 
