@@ -44,7 +44,7 @@ mod test_config {
         let config = config.unwrap();
         assert_eq!(config.database.database_addr(), "127.0.0.1:9042".to_string());
         assert_eq!(config.database.keyspace(), "concert_connect".to_string());
-        assert_eq!(config.database.tables.user_table.name, "user_table");
+        assert_eq!(config.database.tables.user_table.name.to_string(), "user_table");
         // assert_eq!(
         //     config.database.tables.user_table.columns,
         //     vec![

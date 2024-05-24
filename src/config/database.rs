@@ -1,5 +1,6 @@
 use serde::Deserialize;
 use struct_iterable::Iterable;
+use crate::domain::TableName;
 
 #[derive(Deserialize, Clone, Debug)]
 pub struct DatabaseConfig {
@@ -33,7 +34,7 @@ pub struct Tables {
 
 #[derive(Deserialize, Clone, Debug)]
 pub struct TableConfig {
-    pub name: String,
+    pub name: TableName,
     pub columns: Vec<Column>,
     pub primary_key: String
 }

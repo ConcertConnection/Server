@@ -1,17 +1,19 @@
 use std::collections::HashMap;
-use anyhow::{Result, anyhow};
-use scylla::serialize::row::SerializeRow;
-use scylla::transport::session::Session;
+
+use anyhow::{Context, Result};
 use scylla::{QueryResult, SessionBuilder};
 use scylla::prepared_statement::PreparedStatement;
-use scylla::transport::errors::QueryError;
-use crate::config::{ CommonConfig, database::TableConfig};
-use crate::config::database::Column;
-
+use scylla::serialize::row::SerializeRow;
+use scylla::transport::session::Session;
 use struct_iterable::Iterable;
 
-mod row_structs;
 pub use row_structs::*;
+
+use crate::config::{CommonConfig, database::TableConfig};
+use crate::config::database::Column;
+use crate::domain::TableError;
+
+mod row_structs;
 
 pub struct DatabaseConnection {
     //* holds the db session and prepared statements
@@ -38,52 +40,84 @@ impl DatabaseConnection {
             .await?;
         Ok(DatabaseConnection { session, keyspace, statements })
     }
-    pub async fn execute<T: SerializeRow + Nameable, C: SerializeRow>(
-        &self,
+    pub async fn execute<T: SerializeRow + Nameable, C: SelectQueryChange>(
+        &mut self,
         table_name: &String,
         kind: &mut String,
         row_values: Option<&T>,
         conditions: Option<&C>
-    ) -> Result<QueryResult, QueryError> {
+    ) -> Result<QueryResult, TableError> {
         // This function executes any of the prepared statements.
         // If insert is the type a row value must be included, function panics if not.
         // If select is the type a result of a vec of results.
         // Does not support batch insert.
+        self.ensure_keyspace().await?;
         if kind == "insert" && row_values.is_none() {
-            panic!("Row values required for insert")
+            return Err(TableError::MissingRowValues)
         }
-        let table = &self.statements.table_queries[table_name];
-        let kind = if conditions.is_some() && kind.to_lowercase() == "select" {
-            kind.push_str("_where");
-            kind
+
+        let adjusted_kind = if conditions.is_some() && kind.eq_ignore_ascii_case("select") {
+            format!("{}_where", kind)
         } else {
-            kind
+            kind.to_string()
         };
-        let prepared_statement = match table.get_query(kind) {
-            Ok(statement) => statement,
-            Err(e) => panic!("{e}")
-        };
-        if *self.session.get_keyspace().unwrap() != self.keyspace {
-            self.session.use_keyspace(&self.keyspace, false)
-                .await?
-        }
-        if let Some(row) = row_values {
-            if !self.table_name_contains_row_value_name(table_name, row) {
-                panic!("The passed Serialize row struct does not match the table name passed")
+
+        let prepared_statement = {
+            let table = self
+                .statements
+                .table_queries
+                .get_mut(table_name)
+                .ok_or(TableError::TableNameNotFound(table_name.to_string()))?;
+
+            if adjusted_kind != "select_where" {
+                table
+                    .get_query(&adjusted_kind)
+                    .map_err(|e| TableError::QueryPrepError(
+                        "select where".to_string(), e.to_string()
+                    ))?
+            } else {
+                table
+                    .get_query_where(&conditions.unwrap().get_enum(), &self.session)
+                    .await?
             }
-            self.session.execute(prepared_statement, row)
+        };
+        println!("{:?}", prepared_statement);
+        println!("{:#?}", conditions);
+
+        let execute_result = match (row_values, conditions) {
+            (Some(row), _) if !Self::table_name_contains_row_value_name(table_name, row) => {
+                Err(TableError::RowValueMismatch(table_name.to_string(), row.get_name()))
+            }
+            (Some(row), _) => self
+                .session
+                .execute(prepared_statement, row)
                 .await
-        } else if conditions.is_some(){
-            self.session.execute(prepared_statement, conditions.unwrap())
+                .map_err(|err| TableError::QueryExecutionError(err.to_string())),
+            (None, Some(cond)) => self
+                .session
+                .execute(prepared_statement, cond)
                 .await
-        } else {
-            self.session.execute(prepared_statement, &[])
+                .map_err(|err| TableError::QueryExecutionError(err.to_string())),
+            (None, None) => self
+                .session
+                .execute(prepared_statement, &[])
                 .await
+                .map_err(|err| TableError::QueryExecutionError(err.to_string())),
+        };
+
+        execute_result
+    }
+
+    async fn ensure_keyspace(&self) -> Result<(), TableError> {
+        if *self.session.get_keyspace().unwrap() == self.keyspace {
+            return Ok(())
         }
+        Ok(self.session.use_keyspace(&self.keyspace, false)
+            .await.map_err(|err| TableError::QueryExecutionError(err.to_string()))?)
+
     }
 
     fn table_name_contains_row_value_name(
-        &self,
         table_name: &String,
         row_values: &impl Nameable) -> bool{
         table_name.contains(&row_values.get_name())
@@ -97,7 +131,7 @@ pub struct PreparedStatements {
 
 
 impl PreparedStatements {
-    pub async fn build(session: &Session, config: &CommonConfig) -> Result<Self> {
+    pub async fn build(session: &Session, config: &CommonConfig) -> Result<Self, TableError> {
         let mut  table_queries: HashMap<String, TableQueries> = HashMap::new();
         for (name, value) in config.database.tables.iter() {
             if let Some(value) = value.downcast_ref::<TableConfig>() {
@@ -106,7 +140,7 @@ impl PreparedStatements {
                     .expect(&format!("Could not build table queries, {}", name));
                 table_queries.insert(name.into(), queries);
             } else {
-                return Err(anyhow!("Could not downcast to TableConfig."));
+                return Err(TableError::TableDowncastError("Could not downcast to TableConfig.".to_string()));
             }
 
         }
@@ -118,28 +152,45 @@ impl PreparedStatements {
 pub struct TableQueries {
     insert: PreparedStatement,
     select: PreparedStatement,
-    select_where: PreparedStatement,
-    create: PreparedStatement
+    select_where: HashMap<SelectQueries, PreparedStatement>,
+    create: PreparedStatement,
+    column_names: String,
+    table_name: String
 }
 
 impl TableQueries {
-    pub async fn build(session: &Session, table_config: &TableConfig) -> Result<Self> {
+    pub async fn build(session: &Session, table_config: &TableConfig) -> Result<Self, TableError> {
+        let column_names = Self::get_column_names(&table_config.columns);
         let create_statement = Self::make_create_query(table_config);
-        let create = session.prepare(create_statement).await?;
+        let create = session.prepare(create_statement)
+            .await
+            .map_err(|_| TableError::QueryPrepError("create".to_string(), table_config.name.to_string()))?;
         let response = session.execute(&create, &[])
             .await
             .expect("Did not create table");
 
-        let insert_statement = Self::make_insert_query(table_config);
-        let insert = session.prepare(insert_statement).await?;
+        let insert_statement = Self::make_insert_query(table_config, &column_names);
+        let insert = session.prepare(insert_statement)
+            .await
+            .map_err(|_| TableError::QueryPrepError("Insert".to_string(), table_config.name.to_string()))?;
 
-        let select_statement = Self::make_select_query(table_config);
-        let select = session.prepare(select_statement).await?;
+        let select_statement = Self::make_select_query(table_config, &column_names);
+        let select = session.prepare(select_statement)
+            .await
+            .map_err(|_| TableError::QueryPrepError("select".to_string(), table_config.name.to_string()))?;
 
-        let select_where_statement = Self::make_conditional_select_query(table_config);
-        let select_where = session.prepare(select_where_statement).await?;
 
-        Ok(TableQueries { insert, select, create, select_where })
+        let select_where = HashMap::new();
+
+        Ok(TableQueries {
+            insert,
+            select,
+            create,
+            select_where,
+            column_names,
+            table_name: table_config.name.to_string()
+        }
+        )
     }
     pub fn get_column_names(columns: &Vec<Column>) -> String {
         let col_names: String = columns.iter()
@@ -155,20 +206,17 @@ impl TableQueries {
             .collect::<Vec<String>>()
             .join("AND ")
     }
-    fn make_insert_query(table_config: &TableConfig) -> String {
-        let column_names: String = Self::get_column_names(&table_config.columns);
+    fn make_insert_query(table_config: &TableConfig, column_names: &String) -> String {
         let question_marks = vec!["?"; table_config.columns.len()]
             .join(", ");
         format!("INSERT INTO {} ({}) VALUES ({})", &table_config.name, column_names, question_marks)
     }
 
-    fn make_select_query(table_config: &TableConfig) -> String {
-        let column_names = Self::get_column_names(&table_config.columns);
+    fn make_select_query(table_config: &TableConfig, column_names: &String) -> String {
         format!("SELECT {} FROM {}", column_names, &table_config.name)
     }
 
-    fn make_conditional_select_query(table_config: &TableConfig) -> String {
-        let column_names = Self::get_column_names(&table_config.columns);
+    fn make_conditional_select_query(table_config: &TableConfig, column_names: &String) -> String {
         let select = Self::where_select_clause(&table_config.primary_key);
         format!("SELECT {} FROM {} WHERE {}", column_names, &table_config.name, select)
     }
@@ -184,7 +232,6 @@ impl TableQueries {
     pub fn get_query(&self, query_name: &String) -> Result<&PreparedStatement, String> {
         let query = match query_name.to_lowercase().as_str() {
             "insert" => &self.insert,
-            "select_where" => &self.select_where,
             "select" => &self.select,
             "create" => &self.create,
             other => return Err(format!("{} is not a supported query", other))
@@ -192,24 +239,68 @@ impl TableQueries {
 
         Ok(query)
     }
+
+    pub async fn get_query_where(&mut self, select_queries: &SelectQueries, session: &Session) -> Result<&PreparedStatement, TableError> {
+        if self.select_where.get(select_queries).is_some() {
+            Ok(&self.select_where[select_queries])
+        } else {
+            let cloned_select_queries = select_queries.clone();
+            let statement = self.perpare_where_statement(select_queries, session)
+                .await?;
+            self.select_where.insert(cloned_select_queries, statement);
+            Ok(&self.select_where[select_queries])
+        }
+    }
+
+    async fn perpare_where_statement(
+        &self,
+        select_queries: &SelectQueries,
+        session: &Session
+    ) -> Result<PreparedStatement, TableError> {
+        let where_clause = match select_queries {
+            SelectQueries::Concert(data) => Self::create_where(data),
+            SelectQueries::User(data) => Self::create_where(data),
+            SelectQueries::ClaimedPass(data) => Self::create_where(data)
+        };
+        let statement = format!("SELECT {} FROM {} WHERE {}", &self.column_names, &self.table_name, where_clause);
+        session.prepare(statement).await.map_err(|err| TableError::QueryPrepError("select".to_string(), self.table_name.clone()))
+    }
+
+    fn create_where<T: Iterable>(select_where: &T) -> String {
+        select_where.iter()
+            .filter_map(|(name, value)| {
+                if let Some(&boolean_value) = value.downcast_ref::<bool>() {
+                    if boolean_value {
+                        let mut new_name = name.to_string();
+                        new_name.push_str(" = ?");
+                        return Some(new_name);
+                    }
+                }
+                None
+            })
+            .collect::<Vec<String>>()
+            .join(" AND ")
+    }
 }
 
 
 #[cfg(test)]
 mod tests{
     use chrono::{TimeZone, Utc};
-    use struct_iterable::Iterable;
-    use crate::config;
-    use crate::database::{ClaimedPassConditions, DatabaseConnection, UserConditions};
-    use crate::database::{User, ClaimedPass};
-    use uuid::Uuid;
-    use fake::faker::name::raw::{ FirstName, LastName };
-    use fake::faker::boolean::en::Boolean;
+    use claims::{assert_none, assert_some};
     use fake::Fake;
+    use fake::faker::boolean::en::Boolean;
     use fake::faker::internet::en::SafeEmail;
+    use fake::faker::name::raw::{FirstName, LastName};
     use fake::locales::EN;
-    use claims::{assert_err, assert_ok, assert_none, assert_some};
+    use scylla::frame::value::CqlTimestamp;
+    use struct_iterable::Iterable;
+    use uuid::Uuid;
+
+    use crate::config;
     use crate::config::CommonConfig;
+    use crate::database::{ClaimedPassConditions, Concert, ConcertConditions, DatabaseConnection, UserConditions};
+    use crate::database::{ClaimedPass, User};
 
     fn first_name() -> String { FirstName(EN).fake() }
     fn last_name() -> String { LastName(EN).fake() }
@@ -230,7 +321,7 @@ mod tests{
         let mut config = config::load_configuration()
             .expect("Failed to read config");
 
-        let database_connection = create_new_db_connection(&mut config)
+        let mut database_connection = create_new_db_connection(&mut config)
             .await;
 
 
@@ -243,7 +334,7 @@ mod tests{
     async fn insert_statement_works() {
         let mut config = config::load_configuration()
             .expect("Failed to read config");
-        let database_connection = create_new_db_connection(&mut config)
+        let mut database_connection = create_new_db_connection(&mut config)
             .await;
 
         let user_uuid = Uuid::new_v4();
@@ -347,7 +438,7 @@ mod tests{
     async fn test_conditional_where() {
         let mut config = config::load_configuration()
             .expect("Failed to read config");
-        let database_connection = create_new_db_connection(&mut config)
+        let mut database_connection = create_new_db_connection(&mut config)
             .await;
 
         let user_uuid1 = Uuid::new_v4();
@@ -407,6 +498,76 @@ mod tests{
             .expect("Could not run select query");
         assert_eq!(query_result.rows.as_ref().unwrap().len(), 1);
         assert_eq!(user1, query_result.rows_typed::<User>().unwrap().next().unwrap().unwrap())
+
+    }
+    #[tokio::test]
+    async fn test_conditional_where_concert() {
+        let mut config = config::load_configuration()
+            .expect("Failed to read config");
+        let mut database_connection = create_new_db_connection(&mut config)
+            .await;
+
+        let concert_uuid1 = Uuid::new_v4();
+        let venue_uuid = Uuid::new_v4();
+
+        let concert1 = Concert::new(
+            concert_uuid1,
+            venue_uuid,
+            CqlTimestamp(10000),
+            first_name(),
+            "None".to_string(),
+            "Some_bio".to_string(),
+            "None".to_string(),
+            33,
+            33
+        );
+
+        let concert_uuid2 = Uuid::new_v4();
+
+        let concert2 = Concert::new(
+            concert_uuid2,
+            venue_uuid,
+            CqlTimestamp(190888),
+            first_name(),
+            "None".to_string(),
+            "Some_bio".to_string(),
+            "None".to_string(),
+            33,
+            33
+        );
+        let insert = &mut String::from("insert");
+        let concert_table = String::from("concert_table");
+        let query_result = database_connection.execute::<Concert, ConcertConditions>(
+            &concert_table,
+            insert,
+            Some(&concert1),
+            None
+        )
+            .await
+            .expect("Could not execute insert query");
+        assert_none!(&query_result.rows);
+        let query_result = database_connection.execute::<Concert, ConcertConditions>(
+            &concert_table,
+            insert,
+            Some(&concert2),
+            None
+        )
+            .await
+            .expect("Could not execute insert query");
+        assert_none!(&query_result.rows);
+
+        let conditions = ConcertConditions::new(Some(concert_uuid1), None);
+        let select_where = &mut String::from("select");
+        let query_result = database_connection.execute::<Concert, ConcertConditions>(
+            &concert_table,
+            select_where,
+            None,
+            Some(&conditions)
+        )
+            .await
+            .expect("Could not run select query");
+        assert_eq!(query_result.rows.as_ref().unwrap().len(), 1);
+        assert_eq!(concert1, query_result.rows_typed::<Concert>().unwrap().next().unwrap().unwrap())
 
     }
 }

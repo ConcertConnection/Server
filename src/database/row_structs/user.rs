@@ -1,11 +1,15 @@
+use std::fmt::{Debug, Formatter};
 use uuid::Uuid;
 use scylla::{FromRow, SerializeRow};
 use crate::database::row_structs::Nameable;
 use chrono::{Utc, DateTime};
 use scylla::frame::value::CqlTimestamp;
 use serde::Serialize;
+use struct_iterable::Iterable;
 use super::timestamp_serde;
 use uuid::serde::simple;
+use crate::database::{SelectQueries, SelectQueryChange};
+
 #[derive(FromRow, SerializeRow, Eq, PartialEq, Debug, Serialize)]
 pub struct User {
     #[serde(with="simple")]
@@ -50,16 +54,39 @@ impl User {
     }
 }
 
-#[derive(SerializeRow)]
+#[derive(SerializeRow, Debug)]
 pub struct UserConditions {
-    pub(crate) user_uuid: Uuid
+    pub user_uuid: Option<Uuid>
 }
 
 impl UserConditions {
     pub fn new(user_uuid: Uuid) -> Self {
-        UserConditions { user_uuid }
+        UserConditions { user_uuid: Some(user_uuid) }
     }
     pub fn conditional(&self) -> String {
-        format!(" = {}", self.user_uuid)
+        if self.user_uuid.is_some() {
+            format!(" = {}", self.user_uuid.unwrap())
+        } else {
+            "".to_string()
+        }
+
+    }
+}
+
+#[derive(PartialEq, Eq, Hash, Iterable, Debug, Clone, Copy)]
+pub struct UserSelectQueries {
+    pub user_uuid: bool
+}
+
+impl From<&UserConditions> for UserSelectQueries {
+    fn from(value: &UserConditions) -> Self {
+        Self { user_uuid: value.user_uuid.is_some() }
+    }
+}
+
+impl SelectQueryChange for UserConditions {
+    fn get_enum(&self) -> SelectQueries {
+        let inner: UserSelectQueries = self.into();
+        SelectQueries::User(inner)
     }
 }

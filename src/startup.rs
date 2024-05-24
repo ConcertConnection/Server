@@ -1,4 +1,5 @@
 use std::net::TcpListener;
+use std::sync::Mutex;
 use actix_web::dev::Server;
 use tracing_actix_web::TracingLogger;
 use actix_web::{App, HttpServer, web};
@@ -10,7 +11,7 @@ use crate::database::DatabaseConnection;
 
 pub struct Application {
     port: u16,
-    server: Server
+    server: Server,
 }
 
 impl Application {
@@ -34,7 +35,8 @@ impl Application {
         );
         let listener = TcpListener::bind(address)?;
         let port = listener.local_addr().unwrap().port();
-        let server = run(listener, connection_pool, email_client)?;
+        let app_state = AppState {db_pool: Mutex::new(connection_pool), email_client};
+        let server = run(listener, app_state)?;
         Ok(Self { port, server })
     }
     pub fn port(&self) -> u16 {
@@ -46,23 +48,26 @@ impl Application {
     }
 }
 
+pub struct AppState {
+    pub db_pool: Mutex<DatabaseConnection>,
+    pub email_client: EmailClient
+}
+
 
 
 pub fn run(
     listener: TcpListener,
-    db_pool: DatabaseConnection,
-    email_client: EmailClient
+    app_state: AppState
 ) -> Result<Server, std::io::Error> {
-    let db_pool = web::Data::new(db_pool);
-    let email_client = web::Data::new(email_client);
+    let app_state = web::Data::new(app_state);
     let server = HttpServer::new(
         move || {
             App::new()
                 .wrap(TracingLogger::default())
                 .route("/health_check", web::get().to(routes::health_check))
                 .route("/get_concert", web::get().to(routes::get_concert))
-                .app_data(db_pool.clone())
-                .app_data(email_client.clone())
+                .route("/new_concert", web::post().to(routes::new_concert))
+                .app_data(app_state.clone())
         }
     )
         .listen(listener)?

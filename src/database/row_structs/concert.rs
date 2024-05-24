@@ -1,113 +1,179 @@
-use std::io::Cursor;
-use std::path::Path;
-use base64::{engine::general_purpose, Engine as _};
-use image::{ColorType, GenericImageView, ImageError, ImageFormat};
+use std::any::Any;
 use scylla::frame::value::CqlTimestamp;
 use uuid::Uuid;
 use crate::routes::Concert as ConcertWeb;
-use crate::telemetry::get_subscriber;
-use image::io::Reader as ImageReader;
-use thiserror::Error;
+use scylla::{FromRow, SerializeRow};
+use scylla::_macro_internal::{RowSerializationContext, SerializeCql, SerializeRow};
+use scylla::serialize::{RowWriter, SerializationError};
+use struct_iterable::Iterable;
+use crate::database::{Nameable, SelectQueries, SelectQueryChange};
 
-
+#[derive(SerializeRow, FromRow, Debug, PartialEq)]
 pub struct Concert {
-    concert_uuid: Uuid,
+    pub(crate) concert_uuid: Uuid,
     venue_uuid: Uuid,
     concert_date: CqlTimestamp,
     artist_name: String,
-    artist_image: String,
-    artist_video: String,
-    standby_passes: u16,
-    secured_passes: u16
+    pub(crate) artist_image: String,
+    pub(crate) artist_bio: String,
+    pub(crate) artist_video: String,
+    standby_passes: i32,
+    secured_passes: i32
 }
 
-#[derive(Error, Debug)]
-pub enum ConversionError {
-    #[error("Base64 decoding failed")]
-    Base64DecodingFailed,
-    #[error("Failed to guess image format")]
-    ImageFormatGuessFailed,
-    #[error("Image dimensions or color format extraction failed: {0}")]
-    ImageProcessingFailed(#[from] ImageError),
-    #[error("Image saving failed: {0}")]
-    ImageSavingFailed(#[from] ImageError),
-    #[error("Parse image string failed")]
-    ParseImageStringFailed,
+#[derive(Debug, Iterable)]
+pub struct ConcertConditions {
+    concert_uuid: Option<Uuid>,
+    concert_date: Option<CqlTimestamp>
 }
 
-fn get_image_dimensions_and_color_format(buffer: &[u8]) -> Result<((u32, u32), ColorType), ImageError> {
-    let cursor = Cursor::new(buffer);
-    let img = ImageReader::new(cursor)
-        .with_guessed_format()?
-        .decode()?;
-    let dimensions = img.dimensions();
-    let color = img.color();
-    Ok((dimensions, color))
+impl ConcertConditions {
+    pub fn new(
+        concert_uuid: Option<Uuid>,
+        concert_date: Option<CqlTimestamp>
+    ) -> Self {
+        ConcertConditions {
+            concert_uuid,
+            concert_date
+        }
+    }
+
 }
 
-fn decode_base64_image(image_data: &str) -> Result<Vec<u8>, ConversionError> {
-    general_purpose::STANDARD
-        .decode(image_data)
-        .map_err(|_| ConversionError::Base64DecodingFailed)
+impl SelectQueryChange for ConcertConditions {
+    fn get_enum(&self) -> SelectQueries {
+        let inner: ConcertSelectQueries = self.into();
+        SelectQueries::Concert(inner)
+    }
 }
 
-fn guess_image_format(image_buff: &[u8]) -> Result<ImageFormat, ConversionError> {
-    image::guess_format(image_buff)
-        .map_err(|_| ConversionError::ImageFormatGuessFailed)
+
+impl SerializeRow for ConcertConditions {
+    fn serialize(
+        &self,
+        ctx: &RowSerializationContext<'_>,
+        writer: &mut RowWriter<'_>
+    ) -> Result<(), SerializationError> {
+
+        if self.concert_uuid.is_some() {
+            let cell_writer = writer.make_cell_writer();
+            self.concert_uuid.serialize(&cell_writer)
+        }
+        Ok(())
+    }
+
+    fn is_empty(&self) -> bool {
+        self.field1.is_none() && self.field2.is_none() && self.field3.is_none()
+    }
 }
 
-fn save_image(buffer: &[u8], path: &Path, width: u32, height: u32, color_type: ColorType) -> Result<(), ImageError> {
-    image::save_buffer(path, buffer, width, height, color_type)
+impl ConcertSelectQueries {
+    fn iter(&self) -> impl Iterator<Item = &'static str> {
+        vec![
+            self.concert_uuid.then(|| "concert_uuid"),
+            self.concert_date.then(|| "concert_date"),
+        ]
+            .into_iter()
+            .flatten()
+    }
 }
 
-fn process_image(image_data: &str, artist_name: &str) -> Result<String, ConversionError> {
-    let decoded_image = decode_base64_image(image_data)?;
-    let image_format = guess_image_format(&decoded_image)?;
-    let image_extension = match image_format {
-        ImageFormat::Png => "png",
-        ImageFormat::Jpeg => "jpeg",
-        _ => "unknown",
-    };
-    let image_path = format!("Static/{}.{}", artist_name, image_extension);
-    let ((width, height), color_type) = get_image_dimensions_and_color_format(&decoded_image)?;
-    save_image(&decoded_image, Path::new(&image_path), width, height, color_type)?;
-    Ok(image_path)
+impl Nameable for Concert {
+    fn get_name(&self) -> String {
+        "concert".to_string()
+    }
 }
 
-impl TryFrom<ConcertWeb> for Concert {
-    type Error = ConversionError;
+impl Concert {
+    pub fn new(concert_uuid: Uuid,
+               venue_uuid: Uuid,
+               concert_date: CqlTimestamp,
+               artist_name: String,
+               artist_image: String,
+               artist_bio: String,
+               artist_video: String,
+               standby_passes: i32,
+               secured_passes: i32) -> Self {
+        Concert {
+            concert_uuid,
+            venue_uuid,
+            concert_date,
+            artist_name,
+            artist_image,
+            artist_bio,
+            artist_video,
+            standby_passes,
+            secured_passes
+        }
 
-    fn try_from(value: ConcertWeb) -> Result<Self, Self::Error> {
+    }
+    pub fn get_id(&self) -> &Uuid {
+        &self.concert_uuid
+    }
+    pub fn get_img_path(&self) -> &String {
+        &self.artist_image
+    }
+
+    pub fn get_video_path(&self) -> &String {
+        &self.artist_video
+    }
+
+    pub fn increment_pass(&mut self, kind: String) -> Result<(), String> {
+        match kind.to_lowercase().as_str() {
+            "secured" => Ok(self.secured_passes += 1),
+            "standby" => Ok(self.standby_passes += 1),
+            _ => Err(format!("{kind} is not supported"))
+        }
+    }
+    pub fn decrement_pass(&mut self, kind:  String) -> Result<(), String> {
+        match kind.to_lowercase().as_str() {
+            "secured" => Ok(self.secured_passes -= 1),
+            "standby" => Ok(self.standby_passes -= 1),
+            _ => Err(format!("{kind} is not supported"))
+        }
+    }
+}
+
+
+impl From<ConcertWeb> for Concert {
+
+    fn from(value: ConcertWeb) -> Self {
         let concert_uuid = value.concert_uuid.unwrap_or_else(Uuid::new_v4);
 
-        let artist_image = match value.artist_image {
-            Some(image_data) => {
-                if image_data.starts_with("data:image/png;base64") {
-                    process_image(parse_image_string(&Some(image_data))?, &value.artist_name)
-                } else {
-                    process_image(image_data.as_str(), &value.artist_name)
-                }?
-            },
-            None => "None".to_string(),
-        };
+        let artist_image = value.artist_image.unwrap_or_else(|| "None".to_string());
 
-        let artist_video = "None".to_string();
+        let artist_video = value.artist_video.unwrap_or_else(|| "None".to_string());
 
-        Ok(Concert {
+        let artist_bio = value.artist_bio.unwrap_or_else(|| "".to_string());
+        Concert {
             concert_uuid,
             venue_uuid: value.venue_uuid,
             concert_date: CqlTimestamp(value.concert_date.timestamp_millis()),
             artist_name: value.artist_name,
             artist_image,
             artist_video,
+            artist_bio,
             secured_passes: value.secured_passes,
             standby_passes: value.standby_passes,
-        })
+
+        }
     }
 }
-pub fn parse_image_string(img: &Option<String>) -> &'static str {
-    let img = img.as_ref().unwrap();
-    let index = img.find(",").unwrap() + 1;
-    let img = &img[index..];
-    img
+
+#[derive(PartialEq, Eq, Hash, Debug, Iterable, Clone, Copy)]
+pub struct ConcertSelectQueries {
+    pub concert_uuid: bool,
+    pub concert_date: bool
 }
+
+
+impl From<&ConcertConditions> for ConcertSelectQueries {
+    fn from(value: &ConcertConditions) -> Self {
+        Self {
+            concert_uuid: value.concert_uuid.is_some(),
+            concert_date: value.concert_date.is_some()
+        }
+    }
+}
+
+

@@ -2,7 +2,7 @@ use claims::{assert_err, assert_ok, assert_some};
 use tracing_subscriber::filter::FilterExt;
 use crate::helpers::spawn_app;
 use concert_connect_server::routes::Concert;
-use concert_connect_server::database::row_structs::concert::parse_image_string;
+use concert_connect_server::routes::parse_image_string;
 use base64::{engine::general_purpose, Engine as _};
 
 
@@ -27,7 +27,7 @@ async fn get_concerts_returns_an_image() {
         .unwrap();
     let img = &response.artist_image;
     assert_some!(&img);
-    let img = parse_image_string(img);
+    let img = parse_image_string(&img.as_ref().unwrap());
     let img = general_purpose::STANDARD.decode(img);
     assert_ok!(img);
 }

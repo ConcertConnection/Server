@@ -1,15 +1,12 @@
 use fake::Fake;
 use fake::faker::company::en::CompanyName;
 use fake::faker::internet::en::DomainSuffix;
-use fake::locales::EN;
 use once_cell::sync::Lazy;
-use tracing_subscriber::fmt::format;
-use uuid::Uuid;
 use concert_connect_server::config::{load_configuration};
 use concert_connect_server::telemetry::{get_subscriber, init_subscriber};
-use concert_connect_server::email_client::EmailClient;
 use concert_connect_server::startup::Application;
 use concert_connect_server::database::DatabaseConnection;
+use concert_connect_server::routes::Concert;
 
 
 static TRACING: Lazy<()> = Lazy::new( || {
@@ -47,6 +44,14 @@ impl TestApp {
             .get(&format!("{}/get_concert", &self.address))
             .header("Content-Type", "application/x-ww-form-urlencoded")
             .body(body)
+            .send()
+            .await
+            .expect("Failed to execute request")
+    }
+    pub async fn new_concert(&self, body: &Concert) -> reqwest::Response {
+        reqwest::Client::new()
+            .post(&format!("{}/new_concert", &self.address))
+            .json(&body)
             .send()
             .await
             .expect("Failed to execute request")
